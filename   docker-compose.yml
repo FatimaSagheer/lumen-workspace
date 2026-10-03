@@ -1,0 +1,389 @@
+# ==============================================================
+# Docker Compose configuration for Lumen
+#
+# This file starts the infrastructure/services required by Lumen:
+#
+# 1. PostgreSQL + pgvector → database + vector search for RAG
+# 2. Redis                → cache / temporary data / queues
+# 3. MinIO                → file/object storage for uploaded documents
+#
+# Docker Compose allows us to start all these services together
+# using:
+#
+#     docker compose up -d
+#
+# ==============================================================
+
+
+# ==============================================================
+# SERVICES
+# ==============================================================
+
+# "services" is the main section where we define all containers
+# that Docker Compose should create and run.
+#
+# Each service below (db, redis, minio) becomes a separate
+# Docker container.
+services:
+
+
+  # ============================================================
+  # DATABASE SERVICE
+  # ============================================================
+
+  # "db" is the name we give to our PostgreSQL service.
+  #
+  # Other Docker containers can use this name to communicate
+  # with PostgreSQL.
+  #
+  # For example, FastAPI can connect to:
+  #
+  #     db:5432
+  #
+  # instead of using localhost.
+  db:
+
+
+    # "image" tells Docker which pre-built Docker image
+    # should be used to create this container.
+    #
+    # pgvector/pgvector = PostgreSQL image with pgvector support.
+    #
+    # pg16 = PostgreSQL version 16.
+    #
+    # pgvector is important for Lumen because RAG requires
+    # storing and searching vector embeddings.
+    image: pgvector/pgvector:pg16
+
+
+    # "environment" contains configuration values that are
+    # passed to the PostgreSQL container as environment variables.
+    #
+    # The PostgreSQL Docker image reads these variables when
+    # initializing the database.
+    environment:
+
+
+      # "POSTGRES_USER" specifies the PostgreSQL username
+      # that should be created.
+      #
+      # Our application will use:
+      #
+      #     username = lumen
+      #
+      # If this is removed, PostgreSQL will use its default
+      # initialization behavior instead, which may not match
+      # the credentials expected by our application.
+      POSTGRES_USER: lumen
+
+
+      # "POSTGRES_PASSWORD" specifies the password for the
+      # PostgreSQL user defined above.
+      #
+      # Here:
+      #
+      #     username = lumen
+      #     password = lumen
+      #
+      # These simple credentials are okay for local development,
+      # but production applications should use secure secrets.
+      POSTGRES_PASSWORD: lumen
+
+
+      # "POSTGRES_DB" tells PostgreSQL to create a database
+      # named "lumen".
+      #
+      # Our structure will therefore be:
+      #
+      #     PostgreSQL server
+      #          |
+      #          └── lumen database
+      #
+      # This database can contain tables such as:
+      # users, documents, workspaces, document_chunks, etc.
+      POSTGRES_DB: lumen
+
+
+    # "ports" connects a port on our computer (HOST)
+    # to a port inside the Docker container (CONTAINER).
+    #
+    # Format:
+    #
+    #     HOST_PORT:CONTAINER_PORT
+    #
+    # PostgreSQL normally listens on port 5432.
+    #
+    # Therefore:
+    #
+    #     localhost:5432
+    #             ↓
+    #     PostgreSQL container:5432
+    #
+    # This allows tools running on our computer, such as
+    # DBeaver or pgAdmin, to connect to PostgreSQL.
+    ports: ["5432:5432"]
+
+
+    # "volumes" connects persistent storage or files
+    # from our computer/Docker into the container.
+    #
+    # We have two volume mappings below:
+    #
+    # 1. pgdata → PostgreSQL's actual database files
+    # 2. schema.sql → PostgreSQL's initialization directory
+    volumes:
+
+
+      # "pgdata" is a Docker named volume.
+      #
+      # "/var/lib/postgresql/data" is the location inside the
+      # PostgreSQL container where PostgreSQL stores its database
+      # files.
+      #
+      # Therefore:
+      #
+      #     Docker volume
+      #          ↓
+      #     pgdata
+      #          ↓
+      #     PostgreSQL data directory
+      #
+      # The purpose is persistence.
+      #
+      # Without persistent storage, deleting/recreating the
+      # container could cause database data to be lost.
+      - pgdata:/var/lib/postgresql/data
+
+
+      # This maps our project's schema.sql file into the
+      # special PostgreSQL initialization directory.
+      #
+      # LEFT SIDE:
+      #
+      #     ./db/schema.sql
+      #
+      # means:
+      #
+      #     db/schema.sql
+      #
+      # in our project directory.
+      #
+      # RIGHT SIDE:
+      #
+      #     /docker-entrypoint-initdb.d/001_schema.sql
+      #
+      # is a special directory used by the PostgreSQL Docker
+      # image during initial database creation.
+      #
+      # PostgreSQL will execute this SQL file when the database
+      # is initialized for the first time.
+      #
+      # This is where we can create:
+      #
+      #     tables
+      #     indexes
+      #     pgvector extension
+      #     constraints
+      #     etc.
+      #
+      # IMPORTANT:
+      # These initialization scripts normally run only when
+      # PostgreSQL initializes a NEW/EMPTY data directory.
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql
+
+
+
+  # ============================================================
+  # REDIS SERVICE
+  # ============================================================
+
+  # "redis" is the name of our Redis service/container.
+  #
+  # Other Docker containers can communicate with Redis using:
+  #
+  #     redis:6379
+  redis:
+
+
+    # Use the official Redis version 7 Docker image.
+    #
+    # Redis is an in-memory data store.
+    #
+    # It can be used for:
+    #
+    #     - caching
+    #     - temporary data
+    #     - sessions
+    #     - queues
+    #     - rate limiting
+    #     - background jobs
+    #
+    # In Lumen, Redis can later be used for things such as
+    # background document processing or temporary application state.
+    image: redis:7
+
+
+    # Expose Redis's default port.
+    #
+    # Format:
+    #
+    #     HOST_PORT:CONTAINER_PORT
+    #
+    # Therefore:
+    #
+    #     localhost:6379
+    #          ↓
+    #     Redis container:6379
+    #
+    # Other Docker containers can still use:
+    #
+    #     redis:6379
+    #
+    # even without exposing this port to the host.
+    ports: ["6379:6379"]
+
+
+
+  # ============================================================
+  # MINIO SERVICE
+  # ============================================================
+
+  # "minio" is the name of our MinIO service/container.
+  #
+  # MinIO provides S3-compatible object storage.
+  #
+  # Lumen can use MinIO to store uploaded files such as:
+  #
+  #     PDFs
+  #     Word documents
+  #     images
+  #     other knowledge-base files
+  minio:
+
+
+    # Use the official MinIO Docker image.
+    image: minio/minio
+
+
+    # "command" overrides the default command used to start
+    # the MinIO container.
+    #
+    # "server" tells MinIO to start its object-storage server.
+    #
+    # "/data" tells MinIO where to store its objects/files.
+    #
+    # "--console-address" tells MinIO where its web management
+    # console should listen.
+    #
+    # ":9001" means port 9001 inside the container.
+    #
+    # MinIO therefore provides:
+    #
+    #     Port 9000 → S3/API access
+    #     Port 9001 → Web management console
+    command: server /data --console-address ":9001"
+
+
+    # "environment" contains configuration values passed
+    # into the MinIO container.
+    environment:
+
+
+      # "MINIO_ROOT_USER" defines the administrator username
+      # for the MinIO server.
+      #
+      # Here the username is:
+      #
+      #     lumen
+      MINIO_ROOT_USER: lumen
+
+
+      # "MINIO_ROOT_PASSWORD" defines the administrator
+      # password for the MinIO server.
+      #
+      # Here the password is:
+      #
+      #     lumen-secret
+      #
+      # These credentials are suitable only for local development.
+      # Production credentials should be stored securely.
+      MINIO_ROOT_PASSWORD: lumen-secret
+
+
+    # Expose two MinIO ports to our computer.
+    #
+    # First:
+    #
+    #     9000:9000
+    #
+    #     localhost:9000
+    #           ↓
+    #     MinIO API
+    #
+    # Second:
+    #
+    #     9001:9001
+    #
+    #     localhost:9001
+    #           ↓
+    #     MinIO Web Console
+    #
+    # The API is used by applications such as FastAPI.
+    # The console is useful for us as developers to manage
+    # buckets and uploaded files through a browser.
+    ports: ["9000:9000", "9001:9001"]
+
+
+    # "volumes" provides persistent storage for MinIO.
+    #
+    # "miniodata" is the Docker named volume.
+    #
+    # "/data" is the directory inside the MinIO container
+    # where MinIO stores uploaded objects.
+    #
+    # Therefore:
+    #
+    #     miniodata
+    #          ↓
+    #     /data
+    #          ↓
+    #     MinIO files
+    #
+    # Without persistent storage, deleting/recreating the
+    # container could cause stored files to disappear.
+    volumes: [miniodata:/data]
+
+
+
+# ==============================================================
+# NAMED DOCKER VOLUMES
+# ==============================================================
+
+# "volumes" at the root level declares the named Docker volumes
+# used by our services above.
+#
+# We use named volumes instead of storing database/file data
+# directly inside temporary containers.
+volumes:
+
+
+  # "pgdata" is the persistent storage volume for PostgreSQL.
+  #
+  # It is used above:
+  #
+  #     pgdata:/var/lib/postgresql/data
+  #
+  # It keeps PostgreSQL data safe when the container is
+  # recreated.
+  pgdata:
+
+
+  # "miniodata" is the persistent storage volume for MinIO.
+  #
+  # It is used above:
+  #
+  #     miniodata:/data
+  #
+  # It keeps uploaded documents/files persistent when the
+  # MinIO container is recreated.
+  miniodata:

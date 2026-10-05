@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "ec87ca25-7a4e-45a6-856a-030d4c42ff81",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/workspaces/lumen-workspace/.archify/architecture-lumen-project-20261005-072300/candidate.json",
+  "output": "/workspaces/lumen-workspace/.archify/architecture-lumen-project-20261005-072300/lumen-project.html",
+  "specification": {
+    "sha256": "c6e78569443cfb2152f9d98956d603193eb43abcf2c8ed62a3b7dac37bd6a7a3",
+    "bytes": 5246
+  },
+  "artifact": {
+    "sha256": "20d71d1285fdc88b74931ce198fb6931781ba96967a1051765e350501fcb0b8b",
+    "bytes": 755715
+  }
+}

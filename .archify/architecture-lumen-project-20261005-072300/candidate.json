@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Lumen Project Architecture",
+    "output": ".archify/architecture-lumen-project-20261005-072300/lumen-project.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/FatimaSagheer/lumen-workspace",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "f96b82a9f1133cb3caf1b20a99b92c645cc26b7d"
+    }
+  },
+  "components": [
+    {
+      "id": "browser-user",
+      "type": "external",
+      "label": "User",
+      "sublabel": "Web browser",
+      "pos": [30, 330],
+      "size": [110, 64]
+    },
+    {
+      "id": "next-frontend",
+      "type": "frontend",
+      "label": "Next.js frontend",
+      "sublabel": "Auth + dashboard; tokens in localStorage",
+      "pos": [230, 330],
+      "size": [250, 88],
+      "sources": [
+        {
+          "path": "web/lumen-fe/app/page.tsx",
+          "line": 15,
+          "end_line": 50,
+          "label": "Sign-in and sign-up"
+        },
+        {
+          "path": "web/lumen-fe/lib/api.ts",
+          "line": 1,
+          "end_line": 80,
+          "label": "API client and token storage"
+        },
+        {
+          "path": "web/lumen-fe/app/dashboard/page.tsx",
+          "line": 50,
+          "end_line": 120,
+          "label": "Dashboard preview UI"
+        }
+      ]
+    },
+    {
+      "id": "fastapi",
+      "type": "backend",
+      "label": "FastAPI API",
+      "sublabel": "Auth + workspace routes; async SQL",
+      "pos": [610, 330],
+      "size": [255, 88],
+      "sources": [
+        {
+          "path": "api/app/main.py",
+          "line": 8,
+          "end_line": 37,
+          "label": "CORS and router registration"
+        },
+        {
+          "path": "api/app/routers/auth.py",
+          "line": 20,
+          "end_line": 104,
+          "label": "Auth endpoints and SQL"
+        },
+        {
+          "path": "api/app/routers/workspaces.py",
+          "line": 28,
+          "end_line": 180,
+          "label": "Workspace and membership routes"
+        }
+      ]
+    },
+    {
+      "id": "auth-security",
+      "type": "security",
+      "label": "Auth security helpers",
+      "sublabel": "Argon2 passwords; HS256 JWT; opaque refresh tokens",
+      "pos": [610, 130],
+      "size": [255, 100],
+      "sources": [
+        {
+          "path": "api/app/security.py",
+          "line": 223,
+          "end_line": 350,
+          "label": "Argon2 password hash and verify"
+        },
+        {
+          "path": "api/app/security.py",
+          "line": 369,
+          "end_line": 410,
+          "label": "Access JWT creation"
+        },
+        {
+          "path": "api/app/security.py",
+          "line": 534,
+          "end_line": 628,
+          "label": "JWT verification and refresh tokens"
+        }
+      ]
+    },
+    {
+      "id": "postgres",
+      "type": "database",
+      "label": "PostgreSQL 16 + pgvector",
+      "sublabel": "Auth/workspace data; RAG tables are schema-only",
+      "pos": [1000, 330],
+      "size": [260, 100],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 1,
+          "end_line": 12,
+          "label": "Local pgvector database"
+        },
+        {
+          "path": "api/app/db.py",
+          "line": 116,
+          "end_line": 244,
+          "label": "Async psycopg connection pool"
+        },
+        {
+          "path": "db/schema.sql",
+          "line": 17,
+          "end_line": 649,
+          "label": "Auth, document, and chunk schema"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-to-frontend",
+      "from": "browser-user",
+      "to": "next-frontend",
+      "label": "browser"
+    },
+    {
+      "id": "frontend-to-api",
+      "from": "next-frontend",
+      "to": "fastapi",
+      "label": "JSON REST",
+      "variant": "emphasis"
+    },
+    {
+      "id": "api-to-auth",
+      "from": "fastapi",
+      "to": "auth-security",
+      "label": "uses helpers",
+      "variant": "security"
+    },
+    {
+      "id": "api-to-postgres",
+      "from": "fastapi",
+      "to": "postgres",
+      "label": "pooled SQL",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Authentication flow",
+      "items": [
+        "Sign-up hashes the password, creates a workspace and admin membership, then returns access and refresh tokens.",
+        "The frontend stores both tokens in localStorage; bearer access tokens protect /auth/me and refresh rotates the opaque token.",
+        "PostgreSQL stores password hashes and refresh-token hashes; membership dependencies enforce workspace access and admin checks."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "RAG: data model exists, runtime is not wired",
+      "items": [
+        "The schema enables pgvector and defines workspace-scoped documents and chunks, 1024-dimensional embeddings, HNSW vector and full-text indexes, plus conversation/message tables.",
+        "FastAPI currently registers only auth and workspace routers; no document-ingestion, embedding, retrieval, or answer-generation route/service is present.",
+        "The dashboard shows sample documents and a disabled chat/upload preview, not a live RAG path."
+      ]
+    }
+  ]
+}

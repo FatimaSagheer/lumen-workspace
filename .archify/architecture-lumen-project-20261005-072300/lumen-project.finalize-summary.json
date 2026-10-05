@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "finalize",
+  "status": "skipped",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "/workspaces/lumen-workspace/.archify/architecture-lumen-project-20261005-072300/candidate.json",
+    "sha256": "c6e78569443cfb2152f9d98956d603193eb43abcf2c8ed62a3b7dac37bd6a7a3",
+    "bytes": 5246
+  },
+  "artifact": {
+    "path": "/workspaces/lumen-workspace/.archify/architecture-lumen-project-20261005-072300/lumen-project.html",
+    "sha256": "20d71d1285fdc88b74931ce198fb6931781ba96967a1051765e350501fcb0b8b",
+    "bytes": 755715
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "skipped"
+  },
+  "failedStage": "browser-check",
+  "diagnostics": [
+    {
+      "code": "viewer/chrome-unavailable",
+      "severity": "warning",
+      "message": "Chrome or Chromium is unavailable. Set ARCHIFY_CHROME to its executable path.",
+      "subject": {
+        "artifact": "/workspaces/lumen-workspace/.archify/architecture-lumen-project-20261005-072300/lumen-project.html"
+      },
+      "evidence": {
+        "executable": null
+      },
+      "supportedFixes": [
+        "set ARCHIFY_CHROME to a Chrome or Chromium executable and rerun browser-check"
+      ]
+    }
+  ],
+  "diagnosticSummary": {
+    "total": 1,
+    "shown": 1,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/workspaces/lumen-workspace/.archify/architecture-lumen-project-20261005-072300/lumen-project.finalize.json",
+    "summaryReceipt": "/workspaces/lumen-workspace/.archify/architecture-lumen-project-20261005-072300/lumen-project.finalize-summary.json",
+    "browserCheckReceipt": "/workspaces/lumen-workspace/.archify/architecture-lumen-project-20261005-072300/lumen-project.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.0.1",
+    "availableVersion": "3.0.1",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-05T07:26:22.395Z",
+    "source": "network",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 1231
+}

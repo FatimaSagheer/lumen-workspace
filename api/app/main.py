@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import pool
-from .routers import auth, workspaces
+from .routers import auth, documents, workspaces
 
 
 @asynccontextmanager
@@ -35,3 +35,4 @@ async def health():
 
 app.include_router(auth.router)
 app.include_router(workspaces.router)
+app.include_router(documents.router)

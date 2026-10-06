@@ -11,6 +11,7 @@ import {
   LogOut,
   MessageSquare,
   Settings,
+  Users,
 } from "lucide-react";
 import Logo from "@/components/logo";
 import { MeContext } from "@/lib/me-context";
@@ -28,6 +29,7 @@ import {
 
 const NAV = [
   { label: "Overview", href: "/dashboard", icon: LayoutDashboard, ready: true },
+  { label: "Members", href: "/dashboard/members", icon: Users, ready: true },
   { label: "Documents", href: "/dashboard/documents", icon: FileText, ready: false },
   { label: "Chat", href: "/dashboard/chat", icon: MessageSquare, ready: false },
   { label: "Settings", href: "/dashboard/settings", icon: Settings, ready: false },

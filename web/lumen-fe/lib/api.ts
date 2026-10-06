@@ -80,3 +80,65 @@ export const refreshTokens = (refresh_token: string) =>
     method: "POST",
     body: JSON.stringify({ refresh_token }),
   });
+
+// ---- Authenticated calls (retry once after a token refresh) ----
+let refreshing: Promise<Tokens> | null = null;
+
+async function authed<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const call = () =>
+    request<T>(path, {
+      ...options,
+      headers: { ...options.headers, Authorization: `Bearer ${getAccessToken() ?? ""}` },
+    });
+  try {
+    return await call();
+  } catch (e) {
+    if (!(e instanceof ApiError) || e.status !== 401) throw e;
+    const rt = getRefreshToken();
+    if (!rt) throw e;
+    refreshing ??= refreshTokens(rt).finally(() => {
+      refreshing = null;
+    });
+    saveTokens(await refreshing);
+    return call();
+  }
+}
+
+export type Member = {
+  user_id: string;
+  email: string;
+  name: string | null;
+  role: "admin" | "member";
+};
+export type Invite = {
+  email: string;
+  role: string;
+  expires_at: string;
+  invite_token?: string | null;
+};
+export type WorkspaceInfo = { id: string; name: string; role: string };
+
+export const listMembers = (ws: string) => authed<Member[]>(`/workspaces/${ws}/members`);
+export const listInvites = (ws: string) => authed<Invite[]>(`/workspaces/${ws}/invites`);
+export const createInvite = (ws: string, email: string, role: string) =>
+  authed<Invite>(`/workspaces/${ws}/invites`, {
+    method: "POST",
+    body: JSON.stringify({ email, role }),
+  });
+export const changeRole = (ws: string, userId: string, role: string) =>
+  authed<{ user_id: string; role: string }>(`/workspaces/${ws}/members/${userId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ role }),
+  });
+export const removeMember = (ws: string, userId: string) =>
+  authed<void>(`/workspaces/${ws}/members/${userId}`, { method: "DELETE" });
+export const acceptInvite = (token: string) =>
+  authed<WorkspaceInfo>("/invites/accept", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+export const createWorkspace = (name: string) =>
+  authed<WorkspaceInfo>("/workspaces", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });

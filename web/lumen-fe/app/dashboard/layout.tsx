@@ -4,8 +4,6 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  Check,
-  ChevronDown,
   FileText,
   LayoutDashboard,
   LogOut,
@@ -14,6 +12,7 @@ import {
   Users,
 } from "lucide-react";
 import Logo from "@/components/logo";
+import WorkspaceMenu from "@/components/WorkspaceMenu";
 import { MeContext } from "@/lib/me-context";
 import {
   ApiError,
@@ -65,7 +64,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [me, setMe] = useState<Me | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     loadMeOnce()
@@ -95,7 +93,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const selectWorkspace = (id: string) => {
     setWorkspaceId(id);
     localStorage.setItem("workspace_id", id);
-    setMenuOpen(false);
+  };
+
+  const handleCreated = (ws: { id: string; name: string; role: string }) => {
+    setMe((m) => (m ? { ...m, workspaces: [...m.workspaces, ws] } : m));
+    selectWorkspace(ws.id);
   };
 
   if (error) {
@@ -195,33 +197,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <Logo size={32} />
             </div>
 
-            <div className="relative ml-auto lg:ml-0">
-              <button
-                onClick={() => setMenuOpen(!menuOpen)}
-                className="flex items-center gap-2 rounded-xl border border-[#D9DCF5] px-3 py-2 text-sm font-medium transition hover:bg-[#EEF0FF]"
-              >
-                <span className="max-w-[180px] truncate">{workspace.name}</span>
-                <span className="rounded-full bg-[#EEF0FF] px-2 py-0.5 text-xs font-medium text-[#4F46E5]">
-                  {workspace.role}
-                </span>
-                <ChevronDown size={16} className="text-[#14142B]/45" />
-              </button>
-
-              {menuOpen && (
-                <div className="absolute left-0 top-full z-20 mt-2 w-64 rounded-xl border border-[#D9DCF5] bg-white p-1 shadow-lg lg:left-auto lg:right-0">
-                  {me.workspaces.map((w) => (
-                    <button
-                      key={w.id}
-                      onClick={() => selectWorkspace(w.id)}
-                      className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-[#EEF0FF]"
-                    >
-                      <span className="truncate">{w.name}</span>
-                      {w.id === workspace.id && <Check size={16} className="text-[#4F46E5]" />}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <WorkspaceMenu
+              workspaces={me.workspaces}
+              currentId={workspace.id}
+              onSelect={selectWorkspace}
+              onCreated={handleCreated}
+            />
 
             <button
               onClick={handleLogout}

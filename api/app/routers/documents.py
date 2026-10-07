@@ -2,7 +2,7 @@ import asyncio
 import random
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends , HTTPException
 
 from ..db import get_conn, pool
 from ..deps import get_membership
@@ -112,7 +112,20 @@ async def list_documents(m=Depends(get_membership), conn=Depends(get_conn)):
     )
     return await cur.fetchall()
 
-
+@router.get("/workspaces/{workspace_id}/documents/{doc_id}", response_model=DocumentOut)
+async def get_document(
+    doc_id: UUID,
+    m=Depends(get_membership),
+    conn=Depends(get_conn),
+):
+    cur = await conn.execute(
+        ELECT_DOC + " WHERE d.id = %s AND d.workspace_id = %s",
+        (doc_id, m["workspace_id"]),
+    )
+    doc = await cur.fetchone()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc
 # ---- Your turn: add these below, one at a time ----
 # 1. GET    /workspaces/{workspace_id}/documents/{doc_id}   (get one)
 # 2. DELETE /workspaces/{workspace_id}/documents/{doc_id}   (admin or uploader)

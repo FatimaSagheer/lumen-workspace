@@ -2,13 +2,17 @@ import asyncio
 import random
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, Depends
 
 from ..db import get_conn, pool
 from ..deps import get_membership
 from ..document_schemas import DocumentCreate, DocumentOut
 
 router = APIRouter(tags=["documents"])
+
+# Python keeps only a weak reference to a running task, so we hold our own
+# reference until it finishes. Otherwise it can be garbage collected mid-run.
+_tasks: set[asyncio.Task] = set()
 
 SELECT_DOC = """
 SELECT d.id, d.workspace_id, d.title, d.source_type, d.source_url, d.mime_type,
@@ -62,7 +66,6 @@ async def advance_status(doc_id: UUID) -> None:
 )
 async def create_document(
     body: DocumentCreate,
-    background: BackgroundTasks,
     m=Depends(get_membership),
     conn=Depends(get_conn),
 ):
@@ -91,7 +94,11 @@ async def create_document(
     doc = await cur.fetchone()
     await conn.commit()
 
-    background.add_task(advance_status, doc_id)
+    # Start the simulated processing on its own, so this request's database
+    # connection is released as soon as the response is sent.
+    task = asyncio.create_task(advance_status(doc_id))
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
     return doc
 
 
@@ -104,3 +111,11 @@ async def list_documents(m=Depends(get_membership), conn=Depends(get_conn)):
         (m["workspace_id"],),
     )
     return await cur.fetchall()
+
+
+# ---- Your turn: add these below, one at a time ----
+# 1. GET    /workspaces/{workspace_id}/documents/{doc_id}   (get one)
+# 2. DELETE /workspaces/{workspace_id}/documents/{doc_id}   (admin or uploader)
+# 3. PATCH  /workspaces/{workspace_id}/documents/{doc_id}   (rename)
+# 4. GET    /workspaces/{workspace_id}/documents/stats      (put ABOVE the {doc_id} routes)
+# 5. Replace list_documents with keyset pagination, search and a status filter

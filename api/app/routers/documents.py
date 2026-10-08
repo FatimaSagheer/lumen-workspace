@@ -119,13 +119,43 @@ async def get_document(
     conn=Depends(get_conn),
 ):
     cur = await conn.execute(
-        ELECT_DOC + " WHERE d.id = %s AND d.workspace_id = %s",
+        SELECT_DOC + " WHERE d.id = %s AND d.workspace_id = %s",
         (doc_id, m["workspace_id"]),
     )
     doc = await cur.fetchone()
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return doc
+    
+@router.delete("/workspaces/{workspace_id}/documents/{doc_id}", status_code=204)
+async def delete_document(
+    doc_id: UUID,
+    m=Depends(get_membership),
+    conn=Depends(get_conn),
+):
+    # Step 1: find it (same two conditions as get_document)
+    cur = await conn.execute(
+        "SELECT id, uploaded_by FROM documents WHERE id= %s AND workspace_id= %s",
+        (doc_id, m["workspace_id"]),
+    )
+    doc = await cur.fetchone()
+
+    # Step 2: nothing found -> 404
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Step 3: who is allowed?
+    is_admin = m["role"] == "admin"
+    is_uploader = doc["uploaded_by"] == m["user"]["id"]
+    if not (is_admin or is_uploader):
+        raise HTTPException(status_code=403, detail="Only an admin or the uploader can delete this document")
+
+    # Step 4: delete it and save
+    await conn.execute(
+        "DELETE FROM documents WHERE id = %s AND workspace_id = %s",
+        (doc_id, m['workspace_id']),
+    )
+    await conn.commit()
 # ---- Your turn: add these below, one at a time ----
 # 1. GET    /workspaces/{workspace_id}/documents/{doc_id}   (get one)
 # 2. DELETE /workspaces/{workspace_id}/documents/{doc_id}   (admin or uploader)

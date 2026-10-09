@@ -95,3 +95,63 @@ def test_outsider_cannot_delete(team, make_user):
     outsider = make_user("Outsider")
     r = outsider.request("DELETE", f"/workspaces/{ws}/documents/{doc['id']}")
     assert r.status_code == 404
+
+# ---- Rename ----
+
+def test_uploader_can_rename_own_document(team):
+    admin, member, ws = team
+    doc = new_doc(member, ws, "Old name")
+    r = member.request("PATCH", f"/workspaces/{ws}/documents/{doc['id']}", json={"title": "New name"})
+    assert r.status_code == 200
+    assert r.json()["title"] == "New name"
+
+
+def test_admin_can_rename_a_members_document(team):
+    admin, member, ws = team
+    doc = new_doc(member, ws, "Old name")
+    r = admin.request("PATCH", f"/workspaces/{ws}/documents/{doc['id']}", json={"title": "By admin"})
+    assert r.status_code == 200
+
+
+def test_member_cannot_rename_someone_elses_document(team):
+    admin, member, ws = team
+    doc = new_doc(admin, ws, "Admin doc")
+    r = member.request("PATCH", f"/workspaces/{ws}/documents/{doc['id']}", json={"title": "Hacked"})
+    assert r.status_code == 403
+    # and the title really did not change
+    check = admin.request("GET", f"/workspaces/{ws}/documents/{doc['id']}")
+    assert check.json()["title"] == "Admin doc"
+
+
+def test_blank_title_is_rejected(team):
+    admin, member, ws = team
+    doc = new_doc(admin, ws)
+    r = admin.request("PATCH", f"/workspaces/{ws}/documents/{doc['id']}", json={"title": "   "})
+    assert r.status_code == 422
+
+
+def test_rename_unknown_document_is_404(team):
+    admin, member, ws = team
+    r = admin.request(
+        "PATCH",
+        f"/workspaces/{ws}/documents/00000000-0000-0000-0000-000000000000",
+        json={"title": "x"},
+    )
+    assert r.status_code == 404
+
+
+def test_cannot_rename_through_another_workspace(team):
+    admin, member, ws = team
+    doc = new_doc(admin, ws)
+    other = admin.request("POST", "/workspaces", json={"name": "Other"}).json()
+    r = admin.request(
+        "PATCH", f"/workspaces/{other['id']}/documents/{doc['id']}", json={"title": "Leak"}
+    )
+    assert r.status_code == 404
+
+
+def test_rename_updates_the_updated_at_time(team):
+    admin, member, ws = team
+    doc = new_doc(admin, ws)
+    r = admin.request("PATCH", f"/workspaces/{ws}/documents/{doc['id']}", json={"title": "Later"})
+    assert r.json()["updated_at"] > doc["updated_at"]

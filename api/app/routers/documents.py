@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends , HTTPException
 
 from ..db import get_conn, pool
 from ..deps import get_membership
-from ..document_schemas import DocumentCreate, DocumentOut
+from ..document_schemas import DocumentCreate, DocumentOut ,DocumentUpdate
 
 router = APIRouter(tags=["documents"])
 
@@ -156,9 +156,59 @@ async def delete_document(
         (doc_id, m['workspace_id']),
     )
     await conn.commit()
-# ---- Your turn: add these below, one at a time ----
-# 1. GET    /workspaces/{workspace_id}/documents/{doc_id}   (get one)
-# 2. DELETE /workspaces/{workspace_id}/documents/{doc_id}   (admin or uploader)
-# 3. PATCH  /workspaces/{workspace_id}/documents/{doc_id}   (rename)
-# 4. GET    /workspaces/{workspace_id}/documents/stats      (put ABOVE the {doc_id} routes)
-# 5. Replace list_documents with keyset pagination, search and a status filter
+
+@router.patch("/workspaces/{workspace_id}/documents/{doc_id}", response_model=DocumentOut)
+async def rename_document(
+    doc_id: UUID,
+    body: DocumentUpdate,
+    m=Depends(get_membership),
+    conn=Depends(get_conn),
+):
+    # Step 1: find it (same as delete)
+    cur = await conn.execute(
+        "SELECT id, uploaded_by FROM documents WHERE id = %s AND workspace_id = %s",
+        (doc_id, m['workspace_id']),
+    )
+    doc = await cur.fetchone()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Step 2: who is allowed? (same rule as delete)
+    is_admin = m["role"] == "admin"
+    is_uploader = doc["uploaded_by"] == m["user"]["id"]
+    if not (is_admin or is_uploader):
+        raise HTTPException(status_code=403, detail="Only an admin or the uploader can rename this document")
+
+    # Step 3: change the title AND the updated_at time
+    await conn.execute(
+        "UPDATE documents SET title = %s, updated_at = now() WHERE id = %s AND workspace_id = %s",
+        (body.title, doc_id, m["workspace_id"]),
+    )
+    await conn.commit()
+
+    # Step 4: read it back and return it (same as create_document)
+    cur = await conn.execute(
+        SELECT_DOC + " WHERE d.id = %s AND d.workspace_id = %s",
+        (doc_id, m["workspace_id"]),
+    )
+    return await cur.fetchone()
+
+async def get_doc_or_404(conn, workspace_id, doc_id):
+    cur = await conn.execute(
+        "SELECT id, uploaded_by FROM documents WHERE id = %s AND workspace_id = %s",
+        (doc_id, workspace_id),
+    )
+    doc = await cur.fetchone()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc
+
+
+def require_admin_or_uploader(m, doc, action):
+    is_admin = m["role"] == "admin"
+    is_uploader = doc['uploaded_by'] == m["user"]["id"]
+    if not (is_admin or is_uploader):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Only an admin or the uploader can {action} this document",
+        )

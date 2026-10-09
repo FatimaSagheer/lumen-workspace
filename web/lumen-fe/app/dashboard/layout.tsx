@@ -29,7 +29,7 @@ import {
 const NAV = [
   { label: "Overview", href: "/dashboard", icon: LayoutDashboard, ready: true },
   { label: "Members", href: "/dashboard/members", icon: Users, ready: true },
-  { label: "Documents", href: "/dashboard/documents", icon: FileText, ready: false },
+  { label: "Documents", href: "/dashboard/documents", icon: FileText, ready: true },
   { label: "Chat", href: "/dashboard/chat", icon: MessageSquare, ready: false },
   { label: "Settings", href: "/dashboard/settings", icon: Settings, ready: false },
 ];

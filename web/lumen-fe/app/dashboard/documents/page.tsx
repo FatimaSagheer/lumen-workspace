@@ -1,263 +1,94 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FileText, Link2, Pencil, Search, Trash2 } from "lucide-react";
+import Link from "next/link";
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  Clock,
+  FileText,
+  Link2,
+  Send,
+} from "lucide-react";
 import StatusBadge from "@/components/statusBadge";
 import { useMe } from "@/lib/me-context";
 import {
-  createDocument,
-  deleteDocument,
+  documentStats,
   listDocuments,
-  renameDocument,
   type Doc,
-  type DocStatus,
+  type DocStats,
 } from "@/lib/api";
 
-const PAGE = 20; // rows per page
-const POLL_MS = 2000; // how often to refresh while documents are processing
+const POLL_MS = 3000;
 
-const TABS: { label: string; value: DocStatus | null }[] = [
-  { label: "All", value: null },
-  { label: "Queued", value: "queued" },
-  { label: "Processing", value: "processing" },
-  { label: "Ready", value: "ready" },
-  { label: "Failed", value: "failed" },
-];
-
-const msg = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong");
-
-// Returns `value`, but only after it has stopped changing for `delay` ms.
-// Used so we search once per pause in typing, not once per keystroke.
-function useDebounced<T>(value: T, delay = 300): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(value), delay);
-    return () => clearTimeout(t); // cancel the old timer on every keystroke
-  }, [value, delay]);
-  return debounced;
-}
-
-export default function DocumentsPage() {
+export default function Overview() {
   const { me, workspace } = useMe();
+  const firstName = (me.name ?? me.email).split(" ")[0];
 
-  // ---- The list and what it shows ----
-  const [docs, setDocs] = useState<Doc[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [stats, setStats] = useState<DocStats | null>(null);
+  const [recent, setRecent] = useState<Doc[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ---- Filters ----
-  const [statusFilter, setStatusFilter] = useState<DocStatus | null>(null);
-  const [search, setSearch] = useState("");
-  const q = useDebounced(search.trim(), 300);
+  // Numbers each request, so an old slow answer can never overwrite a newer one
+  const seq = useRef(0);
 
-  // ---- Add form ----
-  const [title, setTitle] = useState("");
-  const [sourceType, setSourceType] = useState<"upload" | "url">("upload");
-  const [sourceUrl, setSourceUrl] = useState("");
-
-  // ---- Inline rename ----
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editTitle, setEditTitle] = useState("");
-
-  // ---- Refs: values we need to READ inside callbacks without re-creating them ----
-  const seq = useRef(0); // numbers each full load, so old answers can be ignored
-  const lengthRef = useRef(0); // how many rows are on screen right now
-  const keyRef = useRef(""); // identifies the current workspace + filters
-  const pendingRef = useRef(0); // how many optimistic adds are still in flight
-  const loadingMoreRef = useRef(false);
-  const editDone = useRef(false); // stops rename from saving twice (Enter then blur)
-
-  const key = `${workspace.id}|${statusFilter}|${q}`;
-  useEffect(() => {
-    keyRef.current = key;
-    lengthRef.current = docs.length;
-  });
-
-  // ---- Load the first page (or silently refresh what is on screen) ----
-  const load = useCallback(
-    async (silent = false) => {
-      // A silent refresh must not cancel a full load, so only full loads bump the number
-      const my = silent ? seq.current : ++seq.current;
-      if (!silent) {
-        setLoading(true);
-        setError(null);
+  const load = useCallback(async () => {
+    const my = ++seq.current;
+    try {
+      // Both requests run at the same time, which is faster than one after the other
+      const [s, page] = await Promise.all([
+        documentStats(workspace.id),
+        listDocuments(workspace.id, { limit: 4 }),
+      ]);
+      if (my !== seq.current) return;
+      setStats(s);
+      setRecent(page.items);
+      setError(null);
+    } catch (e) {
+      if (my === seq.current) {
+        setError(e instanceof Error ? e.message : "Something went wrong");
       }
-      try {
-        // A silent refresh asks for as many rows as are already visible
-        const size = silent ? Math.min(Math.max(lengthRef.current, PAGE), 100) : PAGE;
-        const page = await listDocuments(workspace.id, {
-          limit: size,
-          status: statusFilter,
-          q,
-        });
-        if (my !== seq.current) return; // a newer load started, so ignore this answer
-        setDocs(page.items);
-        setNextCursor(page.next_cursor);
-      } catch (e) {
-        if (my === seq.current && !silent) setError(msg(e));
-      } finally {
-        if (my === seq.current && !silent) setLoading(false);
-      }
-    },
-    [workspace.id, statusFilter, q],
-  );
+    } finally {
+      if (my === seq.current) setLoading(false);
+    }
+  }, [workspace.id]);
 
-  // Reload from the start whenever the workspace, the tab or the search changes
+  // Load when the page opens, and again whenever the workspace changes
   useEffect(() => {
+    setLoading(true);
+    setStats(null);
+    setRecent([]);
     load();
   }, [load]);
 
-  // ---- Live updates: while anything is queued or processing, refresh every 2s ----
-  const hasActive = docs.some((d) => d.status === "queued" || d.status === "processing");
+  // While anything is queued or processing, refresh every few seconds
+  const hasActive = stats !== null && stats.queued + stats.processing > 0;
   useEffect(() => {
-    if (!hasActive) return; // nothing is changing, so do nothing
-    const id = setInterval(() => {
-      if (pendingRef.current > 0 || loadingMoreRef.current) return; // do not disturb
-      load(true);
-    }, POLL_MS);
-    return () => clearInterval(id); // stop when the effect re-runs or the page closes
+    if (!hasActive) return;
+    const id = setInterval(load, POLL_MS);
+    return () => clearInterval(id);
   }, [hasActive, load]);
 
-  // ---- Load more ----
-  const loadMore = async () => {
-    if (!nextCursor || loadingMoreRef.current) return;
-    const myKey = keyRef.current;
-    loadingMoreRef.current = true;
-    setLoadingMore(true);
-    try {
-      const page = await listDocuments(workspace.id, {
-        limit: PAGE,
-        cursor: nextCursor,
-        status: statusFilter,
-        q,
-      });
-      if (myKey !== keyRef.current) return; // filters changed while we waited
-      setDocs((prev) => {
-        const seen = new Set(prev.map((d) => d.id));
-        return [...prev, ...page.items.filter((d) => !seen.has(d.id))];
-      });
-      setNextCursor(page.next_cursor);
-    } catch (e) {
-      setError(msg(e));
-    } finally {
-      loadingMoreRef.current = false;
-      setLoadingMore(false);
-    }
-  };
-
-  // ---- Add (optimistic: the row appears at once, then is swapped for the real one) ----
-  const onAdd = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const t = title.trim();
-    const u = sourceUrl.trim();
-    const type = sourceType;
-    if (!t) return;
-    setError(null);
-
-    // Only show the temporary row if it would appear in the current view anyway
-    const showTemp = !q && (statusFilter === null || statusFilter === "queued");
-    const now = new Date().toISOString();
-    const temp: Doc = {
-      id: `temp-${Date.now()}`,
-      workspace_id: workspace.id,
-      title: t,
-      source_type: type,
-      source_url: type === "url" ? u : null,
-      mime_type: null,
-      size_bytes: null,
-      status: "queued",
-      error: null,
-      chunk_count: 0,
-      uploaded_by: me.id,
-      uploaded_by_name: me.name ?? me.email,
-      created_at: now,
-      updated_at: now,
-      processed_at: null,
-    };
-
-    pendingRef.current++;
-    if (showTemp) setDocs((prev) => [temp, ...prev]);
-    setTitle("");
-    setSourceUrl("");
-
-    try {
-      const created = await createDocument(workspace.id, {
-        title: t,
-        source_type: type,
-        source_url: type === "url" ? u : undefined,
-      });
-      if (showTemp) {
-        setDocs((prev) => prev.map((d) => (d.id === temp.id ? created : d)));
-      } else {
-        await load(true);
-      }
-    } catch (err) {
-      // Roll back: remove the temporary row and give the typed values back
-      setDocs((prev) => prev.filter((d) => d.id !== temp.id));
-      setTitle(t);
-      setSourceUrl(u);
-      setError(msg(err));
-    } finally {
-      pendingRef.current--;
-    }
-  };
-
-  // ---- Delete ----
-  const onDelete = async (d: Doc) => {
-    if (!window.confirm(`Delete "${d.title}"?`)) return;
-    setError(null);
-    try {
-      await deleteDocument(workspace.id, d.id);
-      setDocs((prev) => prev.filter((x) => x.id !== d.id));
-    } catch (err) {
-      setError(msg(err));
-    }
-  };
-
-  // ---- Rename ----
-  const startEdit = (d: Doc) => {
-    editDone.current = false;
-    setEditingId(d.id);
-    setEditTitle(d.title);
-  };
-
-  const cancelEdit = () => {
-    editDone.current = true;
-    setEditingId(null);
-  };
-
-  const saveEdit = async (d: Doc) => {
-    if (editDone.current) return;
-    editDone.current = true;
-    const t = editTitle.trim();
-    setEditingId(null);
-    if (!t || t === d.title) return;
-    try {
-      const updated = await renameDocument(workspace.id, d.id, t);
-      setDocs((prev) =>
-        prev.map((x) =>
-          x.id === d.id ? { ...x, title: updated.title, updated_at: updated.updated_at } : x,
-        ),
-      );
-    } catch (err) {
-      setError(msg(err));
-    }
-  };
-
-  // Admins can change anything. Members can change only what they uploaded.
-  // (The server enforces this too. This only decides which buttons to show.)
-  const canModify = (d: Doc) => workspace.role === "admin" || d.uploaded_by === me.id;
-
-  const filtering = statusFilter !== null || q !== "";
+  const cards = [
+    { label: "Documents", value: stats?.total, icon: FileText, tone: "bg-[#EEF0FF] text-[#4F46E5]" },
+    { label: "Ready to chat", value: stats?.ready, icon: CheckCircle2, tone: "bg-[#D1FAE5] text-[#065F46]" },
+    {
+      label: "In progress",
+      value: stats ? stats.queued + stats.processing : undefined,
+      icon: Clock,
+      tone: "bg-[#FEF3C7] text-[#633806]",
+    },
+    { label: "Failed", value: stats?.failed, icon: AlertTriangle, tone: "bg-[#FEE2E2] text-[#991B1B]" },
+  ];
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-8">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Documents</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Welcome back, {firstName}</h1>
         <p className="mt-1 text-[#14142B]/55">
-          Files and pages in{" "}
+          You are working in{" "}
           <span className="font-medium text-[#14142B]">{workspace.name}</span>.
         </p>
       </div>
@@ -271,172 +102,107 @@ export default function DocumentsPage() {
         </div>
       )}
 
-      {/* ---- Add form ---- */}
-      <form
-        onSubmit={onAdd}
-        className="flex flex-col gap-3 rounded-2xl border border-[#D9DCF5] bg-white p-4 sm:flex-row"
-      >
-        <input
-          required
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          maxLength={200}
-          placeholder="Document title"
-          className="h-11 flex-1 rounded-xl border border-[#14142B]/10 px-4 text-sm outline-none focus:border-[#4F46E5] focus:ring-4 focus:ring-[#4F46E5]/10"
-        />
-        <select
-          value={sourceType}
-          onChange={(e) => setSourceType(e.target.value as "upload" | "url")}
-          className="h-11 rounded-xl border border-[#14142B]/10 bg-white px-3 text-sm"
-        >
-          <option value="upload">Upload</option>
-          <option value="url">Web page</option>
-        </select>
-        {sourceType === "url" && (
-          <input
-            required
-            type="url"
-            value={sourceUrl}
-            onChange={(e) => setSourceUrl(e.target.value)}
-            placeholder="https://example.com/page"
-            className="h-11 flex-1 rounded-xl border border-[#14142B]/10 px-4 text-sm outline-none focus:border-[#4F46E5] focus:ring-4 focus:ring-[#4F46E5]/10"
-          />
-        )}
-        <button
-          type="submit"
-          className="h-11 rounded-xl bg-[#4F46E5] px-5 text-sm font-semibold text-white transition hover:bg-[#4338CA]"
-        >
-          Add
-        </button>
-      </form>
-
-      {/* ---- Search and status tabs ---- */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-wrap gap-2">
-          {TABS.map((t) => (
-            <button
-              key={t.label}
-              onClick={() => setStatusFilter(t.value)}
-              className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition ${
-                statusFilter === t.value
-                  ? "bg-[#4F46E5] text-white"
-                  : "bg-white text-[#14142B]/65 ring-1 ring-[#D9DCF5] hover:bg-[#EEF0FF]"
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="relative sm:w-64">
-          <Search
-            size={17}
-            className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#14142B]/35"
-          />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search titles"
-            className="h-10 w-full rounded-xl border border-[#14142B]/10 bg-white pl-10 pr-3 text-sm outline-none focus:border-[#4F46E5] focus:ring-4 focus:ring-[#4F46E5]/10"
-          />
-        </div>
+      {/* Real numbers from /documents/stats */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {cards.map(({ label, value, icon: Icon, tone }) => (
+          <div key={label} className="rounded-2xl border border-[#D9DCF5] bg-white p-5">
+            <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${tone}`}>
+              <Icon size={20} />
+            </div>
+            <p className="mt-4 text-3xl font-bold">{value ?? "-"}</p>
+            <p className="text-sm text-[#14142B]/50">{label}</p>
+          </div>
+        ))}
       </div>
 
-      {/* ---- The list ---- */}
-      <section className="rounded-2xl border border-[#D9DCF5] bg-white p-6">
-        {loading ? (
-          <p className="text-sm text-[#14142B]/50">Loading...</p>
-        ) : docs.length === 0 ? (
-          <div className="flex flex-col items-center py-10 text-center">
-            <FileText className="text-[#4F46E5]/50" size={32} />
-            <p className="mt-3 text-sm font-medium">
-              {filtering ? "No documents match" : "No documents yet"}
-            </p>
-            <p className="mt-1 text-xs text-[#14142B]/45">
-              {filtering
-                ? "Try a different search or tab."
-                : "Add your first document above to get started."}
-            </p>
+      <div className="grid gap-6 lg:grid-cols-5">
+        {/* Recent documents, real data */}
+        <section className="rounded-2xl border border-[#D9DCF5] bg-white p-6 lg:col-span-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Recent documents</h2>
+            <Link
+              href="/dashboard/documents"
+              className="flex items-center gap-1 text-sm font-medium text-[#4F46E5] hover:text-[#4338CA]"
+            >
+              View all <ArrowRight size={15} />
+            </Link>
           </div>
-        ) : (
-          <>
-            <ul className="divide-y divide-[#D9DCF5]">
-              {docs.map((d) => {
-                const isTemp = d.id.startsWith("temp-");
-                const editing = editingId === d.id;
-                return (
-                  <li key={d.id} className="flex items-center justify-between gap-3 py-3">
-                    <div className="flex min-w-0 flex-1 items-center gap-3">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#EEF0FF] text-[#4F46E5]">
-                        {d.source_type === "url" ? <Link2 size={19} /> : <FileText size={19} />}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        {editing ? (
-                          <input
-                            autoFocus
-                            value={editTitle}
-                            maxLength={200}
-                            onChange={(e) => setEditTitle(e.target.value)}
-                            onBlur={() => saveEdit(d)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") saveEdit(d);
-                              if (e.key === "Escape") cancelEdit();
-                            }}
-                            className="h-8 w-full rounded-lg border border-[#4F46E5] px-2 text-sm outline-none"
-                          />
-                        ) : (
-                          <p className="truncate text-sm font-medium">{d.title}</p>
-                        )}
-                        <p className="truncate text-xs text-[#14142B]/45">
-                          {d.uploaded_by_name ?? "Unknown"} -{" "}
-                          {new Date(d.created_at).toLocaleDateString()}
-                          {d.status === "ready" && ` - ${d.chunk_count} chunks`}
-                        </p>
-                        {d.status === "failed" && d.error && (
-                          <p className="truncate text-xs text-[#B91C1C]">{d.error}</p>
-                        )}
-                      </div>
+
+          {loading ? (
+            <p className="mt-4 text-sm text-[#14142B]/50">Loading...</p>
+          ) : recent.length === 0 ? (
+            <div className="mt-4 flex flex-col items-center rounded-2xl border-2 border-dashed border-[#D9DCF5] bg-[#F6F7FF] px-6 py-8 text-center">
+              <FileText className="text-[#4F46E5]/60" size={30} />
+              <p className="mt-2 text-sm font-medium">No documents yet</p>
+              <Link
+                href="/dashboard/documents"
+                className="mt-3 rounded-xl bg-[#4F46E5] px-4 py-2 text-sm font-semibold text-white hover:bg-[#4338CA]"
+              >
+                Add your first document
+              </Link>
+            </div>
+          ) : (
+            <ul className="mt-4 divide-y divide-[#D9DCF5]">
+              {recent.map((d) => (
+                <li key={d.id} className="flex items-center justify-between gap-4 py-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#EEF0FF] text-[#4F46E5]">
+                      {d.source_type === "url" ? <Link2 size={19} /> : <FileText size={19} />}
                     </div>
-
-                    <StatusBadge status={d.status} />
-
-                    {canModify(d) && !isTemp && (
-                      <div className="flex shrink-0 items-center gap-1">
-                        <button
-                          onClick={() => startEdit(d)}
-                          aria-label={`Rename ${d.title}`}
-                          className="rounded-lg p-2 text-[#14142B]/45 transition hover:bg-[#EEF0FF] hover:text-[#4F46E5]"
-                        >
-                          <Pencil size={16} />
-                        </button>
-                        <button
-                          onClick={() => onDelete(d)}
-                          aria-label={`Delete ${d.title}`}
-                          className="rounded-lg p-2 text-[#14142B]/45 transition hover:bg-[#FEE2E2] hover:text-[#991B1B]"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    )}
-                  </li>
-                );
-              })}
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{d.title}</p>
+                      <p className="truncate text-xs text-[#14142B]/45">
+                        {d.uploaded_by_name ?? "Unknown"} -{" "}
+                        {new Date(d.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </div>
+                  <StatusBadge status={d.status} />
+                </li>
+              ))}
             </ul>
+          )}
+        </section>
 
-            {nextCursor && (
-              <div className="mt-4 flex justify-center">
-                <button
-                  onClick={loadMore}
-                  disabled={loadingMore}
-                  className="rounded-xl border border-[#D9DCF5] px-5 py-2 text-sm font-medium transition hover:bg-[#EEF0FF] disabled:opacity-60"
-                >
-                  {loadingMore ? "Loading..." : "Load more"}
-                </button>
+        {/* Chat is not built yet, so this stays a labeled preview */}
+        <section className="rounded-2xl border border-[#D9DCF5] bg-white p-6 lg:col-span-2">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Ask Lumen</h2>
+            <span className="rounded-full bg-[#FEF3C7] px-2.5 py-1 text-xs font-medium text-[#633806]">
+              Preview
+            </span>
+          </div>
+
+          <div className="mt-4 space-y-3 rounded-2xl bg-[#F6F7FF] p-4">
+            <div className="flex justify-end">
+              <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-[#4F46E5] px-4 py-2.5 text-sm text-white">
+                What is our refund policy for annual plans?
               </div>
-            )}
-          </>
-        )}
-      </section>
+            </div>
+            <div className="max-w-[90%] rounded-2xl rounded-bl-sm border border-[#D9DCF5] bg-white px-4 py-2.5 text-sm leading-6">
+              Annual plans can be refunded within 30 days of purchase, prorated after that.{" "}
+              <span className="rounded-md bg-[#FEF3C7] px-1.5 py-0.5 text-xs text-[#633806]">
+                1 Billing-policy.pdf
+              </span>
+            </div>
+          </div>
+
+          <div className="mt-4 flex gap-2">
+            <input
+              disabled
+              placeholder="Chat opens in a later week"
+              className="h-11 flex-1 cursor-not-allowed rounded-xl border border-[#D9DCF5] bg-[#F6F7FF] px-4 text-sm placeholder:text-[#14142B]/35"
+            />
+            <button
+              disabled
+              aria-label="Send"
+              className="flex h-11 w-11 cursor-not-allowed items-center justify-center rounded-xl bg-[#4F46E5] text-white opacity-50"
+            >
+              <Send size={18} />
+            </button>
+          </div>
+        </section>
+      </div>
     </div>
   );
 }

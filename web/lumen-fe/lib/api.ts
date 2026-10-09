@@ -142,3 +142,70 @@ export const createWorkspace = (name: string) =>
     method: "POST",
     body: JSON.stringify({ name }),
   });
+// ---- Documents ----
+export type DocStatus = "queued" | "processing" | "ready" | "failed";
+
+export type Doc = {
+  id: string;
+  workspace_id: string;
+  title: string;
+  source_type: "upload" | "url";
+  source_url: string | null;
+  mime_type: string | null;
+  size_bytes: number | null;
+  status: DocStatus;
+  error: string | null;
+  chunk_count: number;
+  uploaded_by: string | null;
+  uploaded_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+  processed_at: string | null;
+};
+
+export type DocPage = { items: Doc[]; next_cursor: string | null };
+export type DocStats = {
+  total: number;
+  queued: number;
+  processing: number;
+  ready: number;
+  failed: number;
+};
+
+export type ListParams = {
+  limit?: number;
+  cursor?: string | null;
+  status?: DocStatus | null;
+  q?: string;
+};
+
+export const listDocuments = (ws: string, p: ListParams = {}) => {
+  const qs = new URLSearchParams();
+  if (p.limit) qs.set("limit", String(p.limit));
+  if (p.cursor) qs.set("cursor", p.cursor);
+  if (p.status) qs.set("status", p.status);
+  if (p.q) qs.set("q", p.q);
+  const query = qs.toString();
+  return authed<DocPage>(`/workspaces/${ws}/documents${query ? `?${query}` : ""}`);
+};
+
+export const documentStats = (ws: string) =>
+  authed<DocStats>(`/workspaces/${ws}/documents/stats`);
+
+export const createDocument = (
+  ws: string,
+  body: { title: string; source_type: "upload" | "url"; source_url?: string },
+) =>
+  authed<Doc>(`/workspaces/${ws}/documents`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const renameDocument = (ws: string, id: string, title: string) =>
+  authed<Doc>(`/workspaces/${ws}/documents/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+
+export const deleteDocument = (ws: string, id: string) =>
+  authed<void>(`/workspaces/${ws}/documents/${id}`, { method: "DELETE" });

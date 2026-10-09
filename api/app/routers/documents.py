@@ -1,12 +1,21 @@
 import asyncio
 import random
 from uuid import UUID
+import base64
+from datetime import datetime
 
-from fastapi import APIRouter, Depends , HTTPException
+from fastapi import APIRouter, Depends, HTTPException ,Query
 
 from ..db import get_conn, pool
 from ..deps import get_membership
-from ..document_schemas import DocumentCreate, DocumentOut ,DocumentUpdate
+from ..document_schemas import (
+    DocStatus,
+    DocumentCreate,
+    DocumentOut,
+    DocumentPage,
+    DocumentStats,
+    DocumentUpdate,
+)
 
 router = APIRouter(tags=["documents"])
 
@@ -22,6 +31,47 @@ SELECT d.id, d.workspace_id, d.title, d.source_type, d.source_url, d.mime_type,
 FROM documents d
 LEFT JOIN users u ON u.id = d.uploaded_by
 """
+
+
+# ---- Helpers ----
+
+
+async def get_doc_or_404(conn, workspace_id, doc_id):
+    """Find a document inside this workspace, or answer 404."""
+    cur = await conn.execute(
+        "SELECT id, uploaded_by FROM documents WHERE id = %s AND workspace_id = %s",
+        (doc_id, workspace_id),
+    )
+    doc = await cur.fetchone()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc
+
+
+def require_admin_or_uploader(m, doc, action):
+    """Allow admins and the person who uploaded the document, refuse everyone else."""
+    is_admin = m["role"] == "admin"
+    is_uploader = doc["uploaded_by"] == m["user"]["id"]
+    if not (is_admin or is_uploader):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Only an admin or the uploader can {action} this document",
+        )
+
+def encode_cursor(created_at: datetime, doc_id: UUID) -> str:
+    """Pack the last row's position into one opaque string (the bookmark)."""
+    raw = f"{created_at.isoformat()}|{doc_id}"
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def decode_cursor(cursor: str) -> tuple[datetime, UUID]:
+    """Unpack a bookmark. Anything that is not a valid one gets a 400, never a crash."""
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+        created_at, doc_id = raw.split("|")
+        return datetime.fromisoformat(created_at), UUID(doc_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid cursor")
 
 
 async def advance_status(doc_id: UUID) -> None:
@@ -57,6 +107,9 @@ async def advance_status(doc_id: UUID) -> None:
                    WHERE id = %s AND status = 'processing'""",
                 (random.randint(5, 40), doc_id),
             )
+
+
+# ---- Endpoints ----
 
 
 @router.post(
@@ -102,15 +155,70 @@ async def create_document(
     return doc
 
 
-@router.get("/workspaces/{workspace_id}/documents", response_model=list[DocumentOut])
-async def list_documents(m=Depends(get_membership), conn=Depends(get_conn)):
-    # Temporary: newest 50, no paging. Replace with keyset pagination.
-    cur = await conn.execute(
+@router.get("/workspaces/{workspace_id}/documents", response_model=DocumentPage)
+async def list_documents(
+    m=Depends(get_membership),
+    conn=Depends(get_conn),
+    limit: int = Query(20, ge=1, le=100),
+    cursor: str | None = None,
+    status: DocStatus | None = None,
+    q: str | None = Query(None, max_length=100),
+):
+    # Build the WHERE part piece by piece. Every user-supplied VALUE goes into
+    # params and is filled in through a %s blank. Never paste it into the text.
+    conditions = ["d.workspace_id = %s"]
+    params = [m["workspace_id"]]
+
+    if status:
+        conditions.append("d.status = %s")
+        params.append(status)
+
+    if q:
+        # Make %, _ and \ ordinary characters instead of wildcards
+        escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        conditions.append("d.title ILIKE %s")
+        params.append(f"%{escaped}%")
+
+    if cursor:
+        created_at, last_id = decode_cursor(cursor)
+        conditions.append("(d.created_at, d.id) < (%s, %s)")
+        params.extend([created_at, last_id])
+
+    sql = (
         SELECT_DOC
-        + " WHERE d.workspace_id = %s ORDER BY d.created_at DESC, d.id DESC LIMIT 50",
+        + " WHERE " + " AND ".join(conditions)
+        + " ORDER BY d.created_at DESC, d.id DESC LIMIT %s"
+    )
+    params.append(limit + 1)  # ask for ONE extra row to learn if another page exists
+
+    cur = await conn.execute(sql, params)
+    rows = await cur.fetchall()
+
+    next_cursor = None
+    if len(rows) > limit:
+        rows = rows[:limit]
+        last = rows[-1]
+        next_cursor = encode_cursor(last["created_at"], last["id"])
+
+    return {"items": rows, "next_cursor": next_cursor}
+
+    
+# IMPORTANT: this route must stay ABOVE get_document. FastAPI checks routes top
+# to bottom, and {doc_id} would otherwise swallow the word "stats".
+@router.get("/workspaces/{workspace_id}/documents/stats", response_model=DocumentStats)
+async def document_stats(m=Depends(get_membership), conn=Depends(get_conn)):
+    cur = await conn.execute(
+        """SELECT count(*) AS total,
+                  count(*) FILTER (WHERE status = 'queued') AS queued,
+                  count(*) FILTER (WHERE status = 'processing') AS processing,
+                  count(*) FILTER (WHERE status = 'ready') AS ready,
+                  count(*) FILTER (WHERE status = 'failed') AS failed
+           FROM documents
+           WHERE workspace_id = %s""",
         (m["workspace_id"],),
     )
-    return await cur.fetchall()
+    return await cur.fetchone()
+
 
 @router.get("/workspaces/{workspace_id}/documents/{doc_id}", response_model=DocumentOut)
 async def get_document(
@@ -126,36 +234,23 @@ async def get_document(
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return doc
-    
+
+
 @router.delete("/workspaces/{workspace_id}/documents/{doc_id}", status_code=204)
 async def delete_document(
     doc_id: UUID,
     m=Depends(get_membership),
     conn=Depends(get_conn),
 ):
-    # Step 1: find it (same two conditions as get_document)
-    cur = await conn.execute(
-        "SELECT id, uploaded_by FROM documents WHERE id= %s AND workspace_id= %s",
-        (doc_id, m["workspace_id"]),
-    )
-    doc = await cur.fetchone()
+    doc = await get_doc_or_404(conn, m["workspace_id"], doc_id)
+    require_admin_or_uploader(m, doc, "delete")
 
-    # Step 2: nothing found -> 404
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
-
-    # Step 3: who is allowed?
-    is_admin = m["role"] == "admin"
-    is_uploader = doc["uploaded_by"] == m["user"]["id"]
-    if not (is_admin or is_uploader):
-        raise HTTPException(status_code=403, detail="Only an admin or the uploader can delete this document")
-
-    # Step 4: delete it and save
     await conn.execute(
         "DELETE FROM documents WHERE id = %s AND workspace_id = %s",
-        (doc_id, m['workspace_id']),
+        (doc_id, m["workspace_id"]),
     )
     await conn.commit()
+
 
 @router.patch("/workspaces/{workspace_id}/documents/{doc_id}", response_model=DocumentOut)
 async def rename_document(
@@ -164,51 +259,17 @@ async def rename_document(
     m=Depends(get_membership),
     conn=Depends(get_conn),
 ):
-    # Step 1: find it (same as delete)
-    cur = await conn.execute(
-        "SELECT id, uploaded_by FROM documents WHERE id = %s AND workspace_id = %s",
-        (doc_id, m['workspace_id']),
-    )
-    doc = await cur.fetchone()
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    doc = await get_doc_or_404(conn, m["workspace_id"], doc_id)
+    require_admin_or_uploader(m, doc, "rename")
 
-    # Step 2: who is allowed? (same rule as delete)
-    is_admin = m["role"] == "admin"
-    is_uploader = doc["uploaded_by"] == m["user"]["id"]
-    if not (is_admin or is_uploader):
-        raise HTTPException(status_code=403, detail="Only an admin or the uploader can rename this document")
-
-    # Step 3: change the title AND the updated_at time
     await conn.execute(
         "UPDATE documents SET title = %s, updated_at = now() WHERE id = %s AND workspace_id = %s",
         (body.title, doc_id, m["workspace_id"]),
     )
     await conn.commit()
 
-    # Step 4: read it back and return it (same as create_document)
     cur = await conn.execute(
         SELECT_DOC + " WHERE d.id = %s AND d.workspace_id = %s",
         (doc_id, m["workspace_id"]),
     )
     return await cur.fetchone()
-
-async def get_doc_or_404(conn, workspace_id, doc_id):
-    cur = await conn.execute(
-        "SELECT id, uploaded_by FROM documents WHERE id = %s AND workspace_id = %s",
-        (doc_id, workspace_id),
-    )
-    doc = await cur.fetchone()
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
-    return doc
-
-
-def require_admin_or_uploader(m, doc, action):
-    is_admin = m["role"] == "admin"
-    is_uploader = doc['uploaded_by'] == m["user"]["id"]
-    if not (is_admin or is_uploader):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Only an admin or the uploader can {action} this document",
-        )

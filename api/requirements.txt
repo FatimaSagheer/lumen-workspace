@@ -5,3 +5,7 @@ pydantic[email]
 pydantic-settings
 pyjwt
 argon2-cffi
+pytest
+httpx
+ruff
+boto3

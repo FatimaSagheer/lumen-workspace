@@ -4,7 +4,7 @@ from botocore.config import Config
 
 from app.config import settings
 
-assert settings.s3_endpoint and settings.s3_access_key, "Fill in S3_* values in .env first"
+assert settings.s3_endpoint and settings.s3_access_key, "Fill in the S3 values first"
 
 s3 = boto3.client(
     "s3",
@@ -17,7 +17,7 @@ s3 = boto3.client(
 
 key = "healthcheck/hello.txt"
 
-# 1. Make a short-lived permission slip to upload ONE object (what the API will do)
+# 1. A short-lived permission slip to upload ONE object (what the API will do)
 url = s3.generate_presigned_url(
     "put_object",
     Params={"Bucket": settings.s3_bucket, "Key": key, "ContentType": "text/plain"},

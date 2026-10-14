@@ -988,3 +988,8 @@ CREATE INDEX IF NOT EXISTS documents_ws_status_page_idx
 -- Title search with ILIKE '%text%'
 CREATE INDEX IF NOT EXISTS documents_title_trgm_idx
   ON documents USING gin (title gin_trgm_ops);
+-- A document exists before its file arrives, so it needs an "uploading" state
+ALTER TYPE doc_status ADD VALUE IF NOT EXISTS 'uploading' BEFORE 'queued';
+
+-- The name the person gave the file (the storage key uses a cleaned version)
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS original_filename text;

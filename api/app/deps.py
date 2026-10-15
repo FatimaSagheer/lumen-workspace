@@ -17,7 +17,7 @@ async def get_current_user(
     try:
         payload = decode_access_token(creds.credentials)
     except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        raise HTTPException(status_code=401, detail="Invalid or expired token") from None
     cur = await conn.execute(
         "SELECT id, email, name FROM users WHERE id = %s", (payload["sub"],)
     )

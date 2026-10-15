@@ -61,7 +61,6 @@
 # This is much easier to understand and use in Python.
 from psycopg.rows import dict_row
 
-
 # ============================================================
 # AsyncConnectionPool
 # ============================================================
@@ -80,7 +79,6 @@ from psycopg.rows import dict_row
 # for PostgreSQL.
 from psycopg_pool import AsyncConnectionPool
 
-
 # ============================================================
 # SETTINGS
 # ============================================================
@@ -98,7 +96,6 @@ from psycopg_pool import AsyncConnectionPool
 # The actual value should normally come from an environment
 # variable rather than being hard-coded in the Python file.
 from .config import settings
-
 
 # ============================================================
 # CREATE THE DATABASE CONNECTION POOL

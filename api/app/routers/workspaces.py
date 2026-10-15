@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -125,7 +125,7 @@ async def create_invite(
         raise HTTPException(status_code=409, detail="Already a member of this workspace")
 
     token = new_refresh_token()
-    expires = datetime.now(timezone.utc) + timedelta(days=INVITE_DAYS)
+    expires = datetime.now(UTC) + timedelta(days=INVITE_DAYS)
     # Re-inviting the same email replaces the old pending invite with a fresh link
     await conn.execute(
         """INSERT INTO invitations (workspace_id, email, role, token_hash, invited_by, expires_at)

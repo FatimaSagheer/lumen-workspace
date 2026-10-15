@@ -74,7 +74,6 @@
 # deliberately slow, memory-hard algorithm.
 import hashlib
 
-
 # ============================================================
 # secrets
 # ============================================================
@@ -94,7 +93,6 @@ import hashlib
 # random values.
 import secrets
 
-
 # ============================================================
 # DATETIME
 # ============================================================
@@ -112,8 +110,7 @@ import secrets
 #
 # "iat" = issued-at time
 # "exp" = expiration time
-from datetime import datetime, timedelta, timezone
-
+from datetime import UTC, datetime, timedelta
 
 # ============================================================
 # JWT
@@ -134,7 +131,6 @@ from datetime import datetime, timedelta, timezone
 #
 # to verify and decode an access token.
 import jwt
-
 
 # ============================================================
 # ARGON2 PASSWORD HASHER
@@ -164,14 +160,12 @@ import jwt
 # users.password_hash
 from argon2 import PasswordHasher
 
-
 # VerifyMismatchError is raised by Argon2 when the supplied
 # password does not match the stored password hash.
 #
 # We catch this exception during login and return False
 # instead of allowing the exception to crash the request.
 from argon2.exceptions import VerifyMismatchError
-
 
 # Import our application settings.
 #
@@ -188,7 +182,6 @@ from argon2.exceptions import VerifyMismatchError
 # Although refresh_token_days is defined in config.py,
 # this particular file does not currently use it directly.
 from .config import settings
-
 
 # ============================================================
 # CREATE ARGON2 PASSWORD HASHER
@@ -399,7 +392,7 @@ def create_access_token(user_id) -> str:
     # USA:      multiple time zones
     #
     # Using UTC gives the backend one consistent reference.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
 
     # --------------------------------------------------------

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from psycopg import errors
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 async def issue_tokens(conn, user_id) -> TokenOut:
     refresh = new_refresh_token()
-    expires = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_days)
+    expires = datetime.now(UTC) + timedelta(days=settings.refresh_token_days)
     await conn.execute(
         "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (%s, %s, %s)",
         (user_id, hash_token(refresh), expires),
@@ -37,7 +37,7 @@ async def signup(body: SignupIn, conn=Depends(get_conn)):
         )
     except errors.UniqueViolation:
         await conn.rollback()
-        raise HTTPException(status_code=409, detail="Email already registered")
+        raise HTTPException(status_code=409, detail="Email already registered") from None
     user = await cur.fetchone()
 
     cur = await conn.execute(

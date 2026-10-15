@@ -1,10 +1,10 @@
 import asyncio
-import random
-from uuid import UUID
 import base64
+import random
 from datetime import datetime
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException ,Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..db import get_conn, pool
 from ..deps import get_membership
@@ -71,7 +71,7 @@ def decode_cursor(cursor: str) -> tuple[datetime, UUID]:
         created_at, doc_id = raw.split("|")
         return datetime.fromisoformat(created_at), UUID(doc_id)
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid cursor")
+        raise HTTPException(status_code=400, detail="Invalid cursor") from None
 
 
 async def advance_status(doc_id: UUID) -> None:

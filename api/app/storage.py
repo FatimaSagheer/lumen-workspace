@@ -94,4 +94,4 @@ def head_object(key: str) -> dict | None:
 
 def delete_object(key: str) -> None:
     """Delete an object. Deleting something that is already gone is fine."""
-    _client().delete_object(Bucket=settings.s3_bucket, Key=key)   x
+    _client().delete_object(Bucket=settings.s3_bucket, Key=key)

@@ -1,8 +1,9 @@
 import asyncio
 import base64
+import logging
 import random
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -15,7 +16,19 @@ from ..document_schemas import (
     DocumentPage,
     DocumentStats,
     DocumentUpdate,
+    UploadOut,
+    UploadRequest,
 )
+from ..storage import (
+    ALLOWED_TYPES,
+    MAX_BYTES,
+    UPLOAD_URL_SECONDS,
+    delete_object,
+    make_key,
+    presign_upload,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["documents"])
 
@@ -39,7 +52,8 @@ LEFT JOIN users u ON u.id = d.uploaded_by
 async def get_doc_or_404(conn, workspace_id, doc_id):
     """Find a document inside this workspace, or answer 404."""
     cur = await conn.execute(
-        "SELECT id, uploaded_by FROM documents WHERE id = %s AND workspace_id = %s",
+        "SELECT id, uploaded_by, status::text AS status, storage_key, size_bytes "
+        "FROM documents WHERE id = %s AND workspace_id = %s",
         (doc_id, workspace_id),
     )
     doc = await cur.fetchone()
@@ -57,6 +71,7 @@ def require_admin_or_uploader(m, doc, action):
             status_code=403,
             detail=f"Only an admin or the uploader can {action} this document",
         )
+
 
 def encode_cursor(created_at: datetime, doc_id: UUID) -> str:
     """Pack the last row's position into one opaque string (the bookmark)."""
@@ -109,6 +124,13 @@ async def advance_status(doc_id: UUID) -> None:
             )
 
 
+def start_processing(doc_id: UUID) -> None:
+    """Start the background processing of a document, and keep a reference to it."""
+    task = asyncio.create_task(advance_status(doc_id))
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+
+
 # ---- Endpoints ----
 
 
@@ -149,10 +171,59 @@ async def create_document(
 
     # Start the simulated processing on its own, so this request's database
     # connection is released as soon as the response is sent.
-    task = asyncio.create_task(advance_status(doc_id))
-    _tasks.add(task)
-    task.add_done_callback(_tasks.discard)
+    start_processing(doc_id)
     return doc
+
+
+@router.post(
+    "/workspaces/{workspace_id}/documents/upload-url",
+    response_model=UploadOut,
+    status_code=201,
+)
+async def create_upload_url(
+    body: UploadRequest,
+    m=Depends(get_membership),
+    conn=Depends(get_conn),
+):
+    # 1. Is this kind of file allowed?
+    if body.content_type not in ALLOWED_TYPES:
+        raise HTTPException(status_code=415, detail="This file type is not allowed")
+
+    # 2. Is it small enough?
+    if body.size_bytes > MAX_BYTES:
+        raise HTTPException(status_code=413, detail="The file is too large")
+
+    # 3. The SERVER makes the id and decides where the file will live
+    doc_id = uuid4()
+    key = make_key(m["workspace_id"], doc_id, body.filename)
+
+    # 4. Record the document as "uploading" (the file has not arrived yet)
+    await conn.execute(
+        """INSERT INTO documents
+             (id, workspace_id, title, source_type, storage_key, mime_type,
+              size_bytes, original_filename, status, uploaded_by)
+           VALUES (%s, %s, %s, 'upload', %s, %s, %s, %s, 'uploading', %s)""",
+        (
+            doc_id,
+            m["workspace_id"],
+            body.filename,
+            key,
+            body.content_type,
+            body.size_bytes,
+            body.filename,
+            m["user"]["id"],
+        ),
+    )
+    cur = await conn.execute(
+        SELECT_DOC + " WHERE d.id = %s AND d.workspace_id = %s",
+        (doc_id, m["workspace_id"]),
+    )
+    doc = await cur.fetchone()
+    await conn.commit()
+
+    # 5. Sign a short-lived link for the browser
+    url = presign_upload(key, body.content_type)
+    return {"document": doc, "upload_url": url, "expires_in": UPLOAD_URL_SECONDS}
 
 
 @router.get("/workspaces/{workspace_id}/documents", response_model=DocumentPage)
@@ -186,7 +257,8 @@ async def list_documents(
 
     sql = (
         SELECT_DOC
-        + " WHERE " + " AND ".join(conditions)
+        + " WHERE "
+        + " AND ".join(conditions)
         + " ORDER BY d.created_at DESC, d.id DESC LIMIT %s"
     )
     params.append(limit + 1)  # ask for ONE extra row to learn if another page exists
@@ -202,7 +274,7 @@ async def list_documents(
 
     return {"items": rows, "next_cursor": next_cursor}
 
-    
+
 # IMPORTANT: this route must stay ABOVE get_document. FastAPI checks routes top
 # to bottom, and {doc_id} would otherwise swallow the word "stats".
 @router.get("/workspaces/{workspace_id}/documents/stats", response_model=DocumentStats)
@@ -251,6 +323,14 @@ async def delete_document(
     )
     await conn.commit()
 
+    # The database row is gone, so remove the stored file too. If that fails we
+    # only leave an orphan file behind, never a record pointing at nothing.
+    if doc["storage_key"]:
+        try:
+            await asyncio.to_thread(delete_object, doc["storage_key"])
+        except Exception:
+            logger.warning("could not delete stored file %s", doc["storage_key"])
+
 
 @router.patch("/workspaces/{workspace_id}/documents/{doc_id}", response_model=DocumentOut)
 async def rename_document(
@@ -273,3 +353,11 @@ async def rename_document(
         (doc_id, m["workspace_id"]),
     )
     return await cur.fetchone()
+
+
+# ---- STILL TO WRITE (you) ----
+# 1. POST /workspaces/{workspace_id}/documents/{doc_id}/complete
+#    Add to the imports: head_object (from ..storage)
+# 2. GET  /workspaces/{workspace_id}/documents/{doc_id}/download-url
+#    Add to the imports: DownloadOut (from ..document_schemas),
+#                        DOWNLOAD_URL_SECONDS and presign_download (from ..storage)

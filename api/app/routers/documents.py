@@ -24,6 +24,7 @@ from ..storage import (
     MAX_BYTES,
     UPLOAD_URL_SECONDS,
     delete_object,
+    head_object,
     make_key,
     presign_upload,
 )
@@ -361,3 +362,53 @@ async def rename_document(
 # 2. GET  /workspaces/{workspace_id}/documents/{doc_id}/download-url
 #    Add to the imports: DownloadOut (from ..document_schemas),
 #                        DOWNLOAD_URL_SECONDS and presign_download (from ..storage)
+@router.post(
+    "/workspaces/{workspace_id}/documents/{doc_id}/complete",
+    response_model=DocumentOut,
+)
+async def complete_upload(
+    doc_id: UUID,
+    m=Depends(get_membership),
+    conn=Depends(get_conn),
+):
+    doc = await get_doc_or_404(conn, m["workspace_id"], doc_id)
+    require_admin_or_uploader(m, doc, "finish uploading")
+
+    if doc["status"] != "uploading":
+        raise HTTPException(status_code=409, detail="This upload is already finished")
+
+    # Ask storage what REALLY arrived. Never trust the browser's word.
+    info = await asyncio.to_thread(head_object, doc["storage_key"])
+    if info is None:
+        raise HTTPException(status_code=409, detail="The file has not arrived in storage yet")
+
+    if info["size"] != doc["size_bytes"] or info["size"] > MAX_BYTES:
+        await asyncio.to_thread(delete_object, doc["storage_key"])
+        await conn.execute(
+            """UPDATE documents
+               SET status = 'failed', error = %s, storage_key = NULL, updated_at = now()
+               WHERE id = %s AND workspace_id = %s""",
+            ("The uploaded file did not match what was announced", doc_id, m["workspace_id"]),
+        )
+        await conn.commit()
+        raise HTTPException(
+            status_code=400, detail="The uploaded file did not match its declared size"
+        )
+
+    # Compare-and-set: if two calls arrive together, only ONE can win
+    cur = await conn.execute(
+        """UPDATE documents SET status = 'queued', updated_at = now()
+           WHERE id = %s AND workspace_id = %s AND status = 'uploading'
+           RETURNING id""",
+        (doc_id, m['workspace_id']),
+    )
+    if await cur.fetchone() is None:
+        raise HTTPException(status_code=409, detail="This upload is already finished")
+    await conn.commit()
+    start_processing(doc_id)
+
+    cur = await conn.execute(
+        SELECT_DOC + " WHERE d.id = %s AND d.workspace_id = %s",
+        (doc_id, m["workspace_id"]),
+    )
+    return await cur.fetchone()

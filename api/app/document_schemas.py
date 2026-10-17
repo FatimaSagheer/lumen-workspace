@@ -97,28 +97,3 @@ class UploadOut(BaseModel):
 class DownloadOut(BaseModel):
     url: str
     expires_in: int
-
-
-class UploadRequest(BaseModel):
-    filename: str = Field(min_length=1, max_length=200)
-    content_type: str = Field(min_length=1, max_length=100)
-    size_bytes: int = Field(gt=0)
-
-    @field_validator("filename")
-    @classmethod
-    def clean_filename(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("File name cannot be blank")
-        return v
-
-
-class UploadOut(BaseModel):
-    document: DocumentOut
-    upload_url: str
-    expires_in: int
-
-
-class DownloadOut(BaseModel):
-    url: str
-    expires_in: int

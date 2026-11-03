@@ -143,8 +143,7 @@ export const createWorkspace = (name: string) =>
     body: JSON.stringify({ name }),
   });
 // ---- Documents ----
-export type DocStatus = "queued" | "processing" | "ready" | "failed";
-
+export type DocStatus = "uploading" | "queued" | "processing" | "ready" | "failed";
 export type Doc = {
   id: string;
   workspace_id: string;
@@ -209,3 +208,78 @@ export const renameDocument = (ws: string, id: string, title: string) =>
 
 export const deleteDocument = (ws: string, id: string) =>
   authed<void>(`/workspaces/${ws}/documents/${id}`, { method: "DELETE" });
+
+export interface UploadOut {
+  document: Doc;
+  upload_url: string;
+  expires_in: number;
+}
+
+export interface UploadRequest {
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+}
+
+
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
+const TYPE_BY_EXTENSION: Record<string, string> = {
+  pdf: "application/pdf",
+  txt: "text/plain",
+  md: "text/markdown",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+};
+
+/** The browser's own file.type is sometimes empty (for .md, for example), so go by the ending. */
+export function contentTypeOf(file: File): string {
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return TYPE_BY_EXTENSION[ext] ?? file.type;
+}
+
+export async function uploadDocument(workspaceId: string, file: File): Promise<Doc> {
+  const contentType = contentTypeOf(file);
+  if (!contentType) {
+    throw new Error("This file type is not supported. Use PDF, DOCX, TXT or MD.");
+  }
+  if (file.size > MAX_UPLOAD_BYTES) {
+    throw new Error("This file is larger than 20 MB.");
+  }
+
+  // Step 1: ask our API for a short-lived upload link
+  const upload = await authed<UploadOut>(`/workspaces/${workspaceId}/documents/upload-url`, {
+    method: "POST",
+    body: JSON.stringify({
+      filename: file.name,
+      content_type: contentType,
+      size_bytes: file.size,
+    }),
+  });
+
+  // Step 2: send the file straight to storage. The Content-Type here MUST match
+  // the one we asked the link to be signed for, or storage refuses it.
+  try {
+    const response = await fetch(upload.upload_url, {
+      method: "PUT",
+      headers: { "Content-Type": contentType },
+      body: file,
+    });
+    if (!response.ok) {
+      throw new Error(`Storage refused the file (HTTP ${response.status}).`);
+    }
+  } catch (e) {
+    // Do not leave a record stuck in "uploading" forever
+    await deleteDocument(workspaceId, upload.document.id).catch(() => {});
+    if (e instanceof TypeError) {
+      throw new Error(
+        "Could not reach file storage. If this keeps happening, the storage bucket's CORS settings may not allow this address.",
+      );
+    }
+    throw e;
+  }
+
+  // Step 3: tell our API the file is there, so it can check and start processing
+  return authed<Doc>(`/workspaces/${workspaceId}/documents/${upload.document.id}/complete`, {
+    method: "POST",
+  });
+}

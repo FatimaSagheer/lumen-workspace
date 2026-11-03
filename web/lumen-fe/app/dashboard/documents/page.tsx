@@ -1,7 +1,6 @@
 
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
@@ -13,15 +12,23 @@ import {
   Link2,
   MessageSquareText,
   Plus,
-  Send,
   Sparkles,
   Upload,
 } from "lucide-react";
 import StatusBadge from "@/components/statusBadge";
 import { useMe } from "@/lib/me-context";
 import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
+
+import {
   documentStats,
   listDocuments,
+  uploadDocument,
   type Doc,
   type DocStats,
 } from "@/lib/api";
@@ -37,8 +44,52 @@ export default function Overview() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const seq = useRef(0);
 
+  // Open the native file picker.
+  const handleSelectFiles = () => {
+    if (!uploading) {
+      fileInputRef.current?.click();
+    }
+  };
+
+  // Upload selected files.
+  const handleFileChange = async (
+    event: ChangeEvent<HTMLInputElement>
+  ) => {
+    const files = Array.from(event.target.files ?? []);
+
+    if (!files.length) return;
+
+    setUploading(true);
+    setUploadError(null);
+
+    try {
+      for (const file of files) {
+        await uploadDocument(workspace.id, file);
+      }
+
+      // Refresh statistics and recent documents.
+      await load();
+    } catch (e) {
+      setUploadError(
+        e instanceof Error ? e.message : "Document upload failed"
+      );
+    } finally {
+      setUploading(false);
+
+      // Allows selecting the same file again.
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
+  // Load workspace documents and statistics.
   const load = useCallback(async () => {
     const my = ++seq.current;
 
@@ -60,30 +111,37 @@ export default function Overview() {
         );
       }
     } finally {
-      if (my === seq.current) setLoading(false);
+      if (my === seq.current) {
+        setLoading(false);
+      }
     }
   }, [workspace.id]);
 
+  // Initial load and workspace changes.
   useEffect(() => {
     setLoading(true);
     setStats(null);
     setRecent([]);
     setError(null);
+
     void load();
 
     return () => {
-      // Prevent an older workspace request from updating this page.
       seq.current++;
     };
   }, [load]);
 
+  // Poll while documents are being processed.
   const hasActive =
     stats !== null && stats.queued + stats.processing > 0;
 
   useEffect(() => {
     if (!hasActive) return;
 
-    const id = setInterval(() => void load(), POLL_MS);
+    const id = setInterval(() => {
+      void load();
+    }, POLL_MS);
+
     return () => clearInterval(id);
   }, [hasActive, load]);
 
@@ -120,6 +178,31 @@ export default function Overview() {
 
   return (
     <main className="mx-auto w-full max-w-[1440px] space-y-8 pb-10 text-[#202139]">
+
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,.docx,.txt"
+        multiple
+        hidden
+        onChange={handleFileChange}
+      />
+
+      {/* Upload error */}
+      {uploadError && (
+        <div
+          role="alert"
+          className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+        >
+          <div className="flex items-center gap-2 font-semibold">
+            <AlertTriangle size={17} />
+            Upload failed
+          </div>
+          <p className="mt-1">{uploadError}</p>
+        </div>
+      )}
+
       {/* Page heading */}
       <header className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
         <div>
@@ -141,16 +224,27 @@ export default function Overview() {
           </p>
         </div>
 
-        <Link
-          href="/dashboard/documents"
-          className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#5145CD] px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#4035B5] focus:outline-none focus:ring-2 focus:ring-[#5145CD]/40 focus:ring-offset-2"
+        <button
+          type="button"
+          onClick={handleSelectFiles}
+          disabled={uploading}
+          className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#5145CD] px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#4035B5] disabled:cursor-not-allowed disabled:opacity-60"
         >
-          <Plus size={17} />
-          Add documents
-        </Link>
+          {uploading ? (
+            <>
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+              Uploading...
+            </>
+          ) : (
+            <>
+              <Plus size={17} />
+              Add documents
+            </>
+          )}
+        </button>
       </header>
 
-      {/* Error state */}
+      {/* Dashboard refresh error */}
       {error && (
         <div
           role="alert"
@@ -158,7 +252,9 @@ export default function Overview() {
         >
           <AlertTriangle size={18} className="mt-0.5 shrink-0" />
           <div>
-            <p className="font-semibold">Couldn&apos;t refresh your workspace</p>
+            <p className="font-semibold">
+              Couldn&apos;t refresh your workspace
+            </p>
             <p className="mt-1">{error}</p>
             <button
               onClick={() => void load()}
@@ -208,6 +304,7 @@ export default function Overview() {
 
       {/* Main content */}
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,0.9fr)]">
+
         {/* Recent documents */}
         <section className="min-w-0 overflow-hidden rounded-2xl border border-[#E9E7F2] bg-white">
           <div className="flex items-center justify-between gap-4 px-5 py-5 sm:px-6">
@@ -246,20 +343,25 @@ export default function Overview() {
                 <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#F0EEFF] text-[#5145CD]">
                   <Upload size={24} strokeWidth={1.7} />
                 </div>
+
                 <h3 className="mt-4 text-sm font-semibold text-[#25243F]">
                   Your library starts here
                 </h3>
+
                 <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-[#85849B]">
                   Add documents to build a searchable knowledge base for your
                   workspace.
                 </p>
-                <Link
-                  href="/dashboard/documents"
-                  className="mt-5 inline-flex h-10 items-center gap-2 rounded-xl bg-[#5145CD] px-4 text-sm font-semibold text-white transition hover:bg-[#4035B5]"
+
+                <button
+                  type="button"
+                  onClick={handleSelectFiles}
+                  disabled={uploading}
+                  className="mt-5 inline-flex h-10 items-center gap-2 rounded-xl bg-[#5145CD] px-4 text-sm font-semibold text-white transition hover:bg-[#4035B5] disabled:opacity-60"
                 >
                   <Plus size={16} />
                   Add your first document
-                </Link>
+                </button>
               </div>
             ) : (
               <ul className="divide-y divide-[#F0EEF6]">
@@ -289,6 +391,7 @@ export default function Overview() {
                       >
                         {d.title}
                       </p>
+
                       <p className="mt-1 truncate text-xs text-[#9291A7]">
                         {d.uploaded_by_name ?? "Unknown"}{" "}
                         <span className="mx-1 text-[#D0CEDD]">·</span>
@@ -352,6 +455,7 @@ export default function Overview() {
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-[#5145CD] ring-1 ring-[#E8E3FC]">
                 <MessageSquareText size={15} />
               </div>
+
               <div>
                 <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#8580A6]">
                   Ask your knowledge base
@@ -366,14 +470,17 @@ export default function Overview() {
               <p className="text-xs font-medium text-[#8580A6]">
                 Example question
               </p>
+
               <p className="mt-1.5 text-sm font-medium leading-6 text-[#373450]">
                 Summarize the key points in my research paper.
               </p>
+
               <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[#F0EEF8] pt-3">
                 <span className="inline-flex items-center gap-1.5 rounded-lg bg-[#F0EEFF] px-2.5 py-1.5 text-[11px] font-medium text-[#5145CD]">
                   <FileText size={13} />
                   Source citations
                 </span>
+
                 <span className="inline-flex items-center gap-1 text-[11px] text-[#85849B]">
                   <CheckCircle2 size={13} />
                   Grounded answers
@@ -398,6 +505,7 @@ export default function Overview() {
               Prepare your knowledge base
               <ArrowRight size={16} />
             </Link>
+
             <p className="mt-2.5 text-center text-[11px] text-[#9290AB]">
               Upload documents to get started
             </p>
@@ -405,15 +513,18 @@ export default function Overview() {
         </section>
       </div>
 
-      {/* A restrained, useful footer action strip */}
+      {/* Footer actions */}
       <section className="grid gap-3 sm:grid-cols-2">
-        <Link
-          href="/dashboard/documents"
-          className="group flex items-center gap-4 rounded-2xl border border-[#E9E7F2] bg-white p-4 transition hover:border-[#D5D0F5] hover:shadow-sm"
+        <button
+          type="button"
+          onClick={handleSelectFiles}
+          disabled={uploading}
+          className="group flex items-center gap-4 rounded-2xl border border-[#E9E7F2] bg-white p-4 text-left transition hover:border-[#D5D0F5] hover:shadow-sm disabled:opacity-60"
         >
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#F0EEFF] text-[#5145CD]">
             <Upload size={19} />
           </div>
+
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-[#33324D]">
               Grow your library
@@ -422,23 +533,25 @@ export default function Overview() {
               Add PDFs, documents, or web links.
             </p>
           </div>
+
           <ArrowDownRight
             size={17}
             className="text-[#AAA7C0] transition group-hover:translate-x-0.5 group-hover:text-[#5145CD]"
           />
-        </Link>
+        </button>
 
         <div className="flex items-center gap-4 rounded-2xl border border-[#E9E7F2] bg-white p-4">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#E7F5EF] text-[#16805D]">
             <CheckCircle2 size={19} />
           </div>
+
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-[#33324D]">
               Workspace at a glance
             </p>
             <p className="mt-1 truncate text-xs text-[#9291A7]">
-              {workspace.name} ·{" "}
-              {stats?.ready ?? 0} documents ready for retrieval
+              {workspace.name} · {stats?.ready ?? 0} documents ready for
+              retrieval
             </p>
           </div>
         </div>

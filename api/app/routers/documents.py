@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from ..config import settings
 from ..db import get_conn, pool
 from ..deps import get_membership
 from ..document_schemas import (
@@ -107,7 +108,7 @@ async def advance_status(doc_id: UUID) -> None:
 
     await asyncio.sleep(4)
     async with pool.connection() as conn:
-        if random.random() < 0.2:
+        if settings.simulate_failures and random.random() < 0.2:
             await conn.execute(
                 """UPDATE documents
                    SET status = 'failed', error = %s,

@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     s3_access_key: str = ""
     s3_secret_key: str = ""
     s3_bucket: str = "lumen-docs"
+        # Development only: the fake document processor fails about 1 in 5 documents on purpose
+    simulate_failures: bool = False
 
 
 settings = Settings()
